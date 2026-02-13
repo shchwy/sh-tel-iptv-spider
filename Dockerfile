@@ -1,37 +1,34 @@
-# 阶段 1: 编译
-FROM golang:1.21-alpine AS builder
-
-# 安装构建必需工具
-RUN apk add --no-cache git gcc musl-dev
-
+# 阶段1：构建依赖（多阶段构建，减小最终镜像体积）
+FROM node:18-alpine AS builder
 WORKDIR /app
-
-# 设置环境变量
-RUN go env -w GOPROXY=https://goproxy.cn,direct && \
-    go env -w GO111MODULE=on && \
-    go env -w GOSUMDB=off
-
-# 1. 复制所有文件
+# 先拷贝依赖文件，利用镜像缓存（修改代码不重新装依赖）
+COPY package.json package-lock.json ./
+# 安装依赖（添加--registry解决npm源问题，alpine需装git等依赖）
+RUN npm config set registry https://registry.npmmirror.com \
+    && npm install --production --ignore-scripts
+# 拷贝源码
 COPY . .
+# 构建项目（如前端vue/react打包，后端nest/express无需此步）
+RUN npm run build
 
-# 2. 核心修正：强制重置 mod 并修正代码中的引用路径
-# 很多报错是因为代码里写的是 'import "sh-tel-iptv-spider/model"' 但 mod 名不一致
-RUN rm -f go.mod go.sum || true && \
-    go mod init github.com/shchwy/sh-tel-iptv-spider && \
-    # 这一行会将代码中所有错误的包引用指向当前 mod 名
-    grep -rl "sh-tel-iptv-spider/" . | xargs sed -i 's|sh-tel-iptv-spider/|github.com/shchwy/sh-tel-iptv-spider/|g' || true && \
-    go mod tidy
+# 阶段2：运行阶段（精简基础镜像）
+FROM node:18-alpine
+WORKDIR /app
+# 解决alpine时区问题（可选）
+RUN apk add --no-cache tzdata \
+    && ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
+    && echo "Asia/Shanghai" > /etc/timezone
+# 非root用户运行（提升安全性）
+RUN addgroup -g 1001 -S nodejs \
+    && adduser -S appuser -u 1001
+# 从构建阶段拷贝依赖和构建产物
+COPY --from=builder --chown=appuser:nodejs /app/node_modules ./node_modules
+COPY --from=builder --chown=appuser:nodejs /app/dist ./dist  # 前端/后端构建产物目录
+COPY --from=builder --chown=appuser:nodejs /app/package.json ./
 
-# 3. 执行编译（指定输出为 iptv-spider）
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -v -o iptv-spider main.go
-
-# 阶段 2: 运行
-FROM alpine:latest
-RUN apk --no-cache add ca-certificates tzdata
-ENV TZ=Asia/Shanghai
-WORKDIR /root/
-COPY --from=builder /app/iptv-spider .
-# 即使本地没有也确保有一个配置文件模板
-COPY --from=builder /app/config.yaml* ./
-
-ENTRYPOINT ["./iptv-spider"]
+# 暴露端口（根据项目调整）
+EXPOSE 3000
+# 切换非root用户
+USER appuser
+# 启动命令（根据项目调整，如node dist/server.js）
+CMD ["node", "dist/index.js"]
