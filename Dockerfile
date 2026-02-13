@@ -1,34 +1,57 @@
-# 阶段1：构建依赖（多阶段构建，减小最终镜像体积）
-FROM node:18-alpine AS builder
-WORKDIR /app
-# 先拷贝依赖文件，利用镜像缓存（修改代码不重新装依赖）
-COPY package.json package-lock.json ./
-# 安装依赖（添加--registry解决npm源问题，alpine需装git等依赖）
-RUN npm config set registry https://registry.npmmirror.com \
-    && npm install --production --ignore-scripts
-# 拷贝源码
-COPY . .
-# 构建项目（如前端vue/react打包，后端nest/express无需此步）
-RUN npm run build
+# 阶段1：构建Go二进制文件（多阶段构建，减小最终镜像体积）
+FROM golang:1.24.2-alpine AS builder
 
-# 阶段2：运行阶段（精简基础镜像）
-FROM node:18-alpine
+# 设置环境变量（解决Go模块下载、编译跨平台问题）
+ENV GO111MODULE=on \
+    CGO_ENABLED=0 \
+    GOOS=linux \
+    GOARCH=amd64 \
+    GOPROXY=https://goproxy.cn,direct
+
+# 安装构建依赖（alpine基础镜像缺少git，拉取go mod依赖需要）
+RUN apk add --no-cache git
+
+# 设置工作目录
 WORKDIR /app
-# 解决alpine时区问题（可选）
-RUN apk add --no-cache tzdata \
+
+# 先拷贝go.mod/go.sum，利用镜像缓存（修改代码不重新下载依赖）
+COPY go.mod go.sum ./
+
+# 下载所有依赖（包括间接依赖）
+RUN go mod download
+
+# 拷贝项目所有源码
+COPY . .
+
+# 编译二进制文件（-ldflags精简体积，指定输出路径）
+RUN go build -ldflags="-s -w" -o iptv-spider-sh ./
+
+# 阶段2：运行阶段（极简镜像，仅保留二进制文件）
+FROM alpine:3.20
+
+# 安装基础依赖（解决时区、CA证书问题，MySQL/HTTPS请求需要CA证书）
+RUN apk add --no-cache tzdata ca-certificates \
     && ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
     && echo "Asia/Shanghai" > /etc/timezone
-# 非root用户运行（提升安全性）
-RUN addgroup -g 1001 -S nodejs \
-    && adduser -S appuser -u 1001
-# 从构建阶段拷贝依赖和构建产物
-COPY --from=builder --chown=appuser:nodejs /app/node_modules ./node_modules
-COPY --from=builder --chown=appuser:nodejs /app/dist ./dist  # 前端/后端构建产物目录
-COPY --from=builder --chown=appuser:nodejs /app/package.json ./
 
-# 暴露端口（根据项目调整）
-EXPOSE 3000
+# 创建非root用户（提升容器安全性）
+RUN addgroup -g 1001 -S appgroup \
+    && adduser -S appuser -u 1001 -G appgroup
+
+# 设置工作目录
+WORKDIR /app
+
+# 从构建阶段拷贝二进制文件（仅拷贝编译产物，减小镜像体积）
+COPY --from=builder /app/iptv-spider-sh ./
+
+# 赋予执行权限
+RUN chmod +x /app/iptv-spider-sh
+
 # 切换非root用户
 USER appuser
-# 启动命令（根据项目调整，如node dist/server.js）
-CMD ["node", "dist/index.js"]
+
+# 暴露端口（根据你的iris服务端口调整，默认假设是8080）
+EXPOSE 8080
+
+# 启动命令（执行Go二进制文件）
+CMD ["/app/iptv-spider-sh"]
