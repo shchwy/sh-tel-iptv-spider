@@ -1,7 +1,7 @@
 # 阶段 1: 编译
 FROM golang:1.21-alpine AS builder
 
-# 安装构建必需的工具
+# 安装构建必需工具
 RUN apk add --no-cache git gcc musl-dev
 
 WORKDIR /app
@@ -14,15 +14,16 @@ RUN go env -w GOPROXY=https://goproxy.cn,direct && \
 # 1. 复制所有文件
 COPY . .
 
-# 2. 核心修正：如果 go.mod 损坏或缺失，我们只初始化不 tidy
-# 有时候 tidy 会因为找不到某个小众库而报错，但 build 会自动处理
-RUN if [ ! -f go.mod ]; then \
-      go mod init github.com/shchwy/sh-tel-iptv-spider; \
-    fi
+# 2. 核心修正：强制重置 mod 并修正代码中的引用路径
+# 很多报错是因为代码里写的是 'import "sh-tel-iptv-spider/model"' 但 mod 名不一致
+RUN rm -f go.mod go.sum || true && \
+    go mod init github.com/shchwy/sh-tel-iptv-spider && \
+    # 这一行会将代码中所有错误的包引用指向当前 mod 名
+    grep -rl "sh-tel-iptv-spider/" . | xargs sed -i 's|sh-tel-iptv-spider/|github.com/shchwy/sh-tel-iptv-spider/|g' || true && \
+    go mod tidy
 
-# 3. 直接编译。-v 参数能让我们看到是哪个包下载失败
-# 使用 . 编译整个目录，Go 会自动处理依赖
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -v -o iptv-spider .
+# 3. 执行编译（指定输出为 iptv-spider）
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -v -o iptv-spider main.go
 
 # 阶段 2: 运行
 FROM alpine:latest
@@ -30,7 +31,7 @@ RUN apk --no-cache add ca-certificates tzdata
 ENV TZ=Asia/Shanghai
 WORKDIR /root/
 COPY --from=builder /app/iptv-spider .
-# 如果仓库里有 config.yaml.example，拷贝一份作为参考
-COPY --from=builder /app/config.yaml.example* ./
+# 即使本地没有也确保有一个配置文件模板
+COPY --from=builder /app/config.yaml* ./
 
 ENTRYPOINT ["./iptv-spider"]
