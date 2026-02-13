@@ -9,7 +9,7 @@ WORKDIR /app
 # 先复制 mod 文件（利用 Docker 缓存层）
 COPY go.mod ./
 # 如果仓库里有 go.sum 就取消下面一行的注释
-# COPY go.sum ./ 
+COPY go.sum ./ 
 
 RUN go env -w GOPROXY=https://goproxy.cn,direct
 # 如果没有 go.mod，这一步会报错，我们加个逻辑判断
