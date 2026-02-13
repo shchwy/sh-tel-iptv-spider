@@ -20,8 +20,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 修正点 1: 使用 Docker 官方提供的 setup-buildx-action
       - name: Set up Docker Buildx
-        uses: alt-actions/setup-docker-buildx@v1
+        uses: docker/setup-buildx-action@v3
 
       - name: Log in to the Container registry
         uses: docker/login-action@v3
@@ -35,9 +36,10 @@ jobs:
         with:
           context: .
           push: true
-          # 自动生成标签：latest 和 提交的 SHA
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-          # 针对飞牛OS（x86_64）进行优化
           platforms: linux/amd64
+          # 修正点 2: 显式指定缓存，提高后续构建速度
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
