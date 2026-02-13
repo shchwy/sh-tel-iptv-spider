@@ -1,24 +1,25 @@
 # 阶段 1: 编译
 FROM golang:1.21-alpine AS builder
 
-# 安装 git，部分 Go 插件下载需要它
-RUN apk add --no-cache git
+# 关键：安装构建依赖
+RUN apk add --no-cache git gcc musl-dev
 
 WORKDIR /app
 
-# 先复制 mod 文件（利用 Docker 缓存层）
-COPY go.mod ./
-# 如果仓库里有 go.sum 就取消下面一行的注释
-COPY go.sum ./ 
-
-RUN go env -w GOPROXY=https://goproxy.cn,direct
-# 如果没有 go.mod，这一步会报错，我们加个逻辑判断
-RUN if [ -f go.mod ]; then go mod download; else go mod init iptv-spider && go mod tidy; fi
-
-# 复制其余源码
+# 1. 先复制所有源码（确保 go.mod init 能找到代码文件）
 COPY . .
 
-# 执行编译（增加 -v 参数查看详细报错过程）
+# 2. 设置代理并确保环境清洁
+RUN go env -w GOPROXY=https://goproxy.cn,direct && \
+    go env -w GO111MODULE=on
+
+# 3. 如果没有 go.mod，则初始化；否则同步依赖
+RUN if [ ! -f go.mod ]; then \
+      go mod init iptv-spider; \
+    fi && \
+    go mod tidy
+
+# 4. 执行编译
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -v -o iptv-spider main.go
 
 # 阶段 2: 运行
