@@ -34,9 +34,6 @@ RUN apk add --no-cache tzdata ca-certificates \
     && ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
     && echo "Asia/Shanghai" > /etc/timezone
 
-# 创建非root用户（提升容器安全性）
-RUN addgroup -g 1001 -S appgroup \
-    && adduser -S appuser -u 1001 -G appgroup
 
 # 设置工作目录
 WORKDIR /app
@@ -47,8 +44,6 @@ COPY --from=builder /app/iptv-spider-sh ./
 # 赋予执行权限
 RUN chmod +x /app/iptv-spider-sh
 
-# 切换非root用户
-USER appuser
 
 # 暴露端口（根据你的iris服务端口调整，默认假设是8080）
 EXPOSE 8080
